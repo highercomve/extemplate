@@ -79,10 +79,14 @@ func (x *Extemplate) Lookup(name string) *template.Template {
 }
 
 // ExecuteTemplate applies the template named name to the specified data object and writes the output to wr.
-func (x *Extemplate) ExecuteTemplate(wr io.Writer, name string, data interface{}) error {
+func (x *Extemplate) ExecuteTemplate(wr io.Writer, name string, data interface{}, fragments ...string) error {
 	tmpl := x.Lookup(name)
 	if tmpl == nil {
 		return fmt.Errorf("extemplate: no template %q", name)
+	}
+
+	if len(fragments) == 1 {
+		return tmpl.ExecuteTemplate(wr, fragments[0], data)
 	}
 
 	return tmpl.Execute(wr, data)
