@@ -6,15 +6,20 @@ package extemplate
 
 import (
 	"bytes"
+	"embed"
 	"fmt"
 	"html/template"
 	"io"
-	"io/ioutil"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
 )
+
+type FsFile struct {
+	Entry os.DirEntry
+	Path  string
+}
 
 var extendsRegex *regexp.Regexp
 
@@ -99,15 +104,64 @@ func (x *Extemplate) ExecuteTemplate(wr io.Writer, name string, data interface{}
 	return tmpl.Execute(wr, data)
 }
 
+func getFilesFromEmbed(fs embed.FS, path string) ([]FsFile, error) {
+	var dirFiles []FsFile
+
+	entries, err := fs.ReadDir(path)
+	if err != nil {
+		return nil, err
+	}
+
+	for _, entry := range entries {
+		fullPath := filepath.Join(path, entry.Name())
+		if entry.IsDir() {
+			subFiles, err := getFilesFromEmbed(fs, fullPath) // Correctly retrieve subFiles
+			if err != nil {
+				return nil, err
+			}
+			dirFiles = append(dirFiles, subFiles...)
+		} else {
+			dirFiles = append(dirFiles, FsFile{Entry: entry, Path: fullPath})
+		}
+	}
+
+	return dirFiles, nil
+}
+
+func getAllFiles(path string) ([]FsFile, error) {
+	var dirFiles []FsFile
+	entries, err := os.ReadDir(path)
+	if err != nil {
+		return nil, err
+	}
+
+	for _, entry := range entries {
+		dirFiles = append(dirFiles, FsFile{Entry: entry, Path: filepath.Join(path, entry.Name())})
+		if entry.IsDir() {
+			subFiles, err := getAllFiles(filepath.Join(path, entry.Name()))
+			if err != nil {
+				return nil, err
+			}
+			dirFiles = append(dirFiles, subFiles...)
+		}
+	}
+
+	return dirFiles, nil
+}
+
 // ParseDir walks the given directory root and parses all files with any of the registered extensions.
 // Default extensions are .html and .tmpl
 // If a template file has {{/* extends "other-file.tmpl" */}} as its first line it will parse that file for base templates.
 // Parsed templates are named relative to the given root directory
-func (x *Extemplate) ParseDir(root string, extensions []string) error {
+func (x *Extemplate) ParseDir(
+	root string,
+	extensions []string,
+	fs *embed.FS,
+) error {
 	var b []byte
 	var err error
 
-	files, err := findTemplateFiles(root, extensions)
+	files, err := findTemplateFiles(root, extensions, fs)
 	if err != nil {
 		return err
 	}
@@ -162,9 +216,11 @@ func (x *Extemplate) ParseDir(root string, extensions []string) error {
 	return nil
 }
 
-func findTemplateFiles(root string, extensions []string) (map[string]*templatefile, error) {
-	var files = map[string]*templatefile{}
-	var exts = map[string]bool{}
+func findTemplateFiles(
+	root string,
+	extensions []string,
+	fs *embed.FS,
+) (map[string]*templatefile, error) {
 
 	root = filepath.Clean(root)
 
@@ -174,43 +230,66 @@ func findTemplateFiles(root string, extensions []string) (map[string]*templatefi
 	// ensure root path has trailing separator
 	root = strings.TrimSuffix(root, "/") + "/"
 
-	// create map of allowed extensions
+	var directoryFiles []FsFile
+	var err error
+	if fs != nil {
+		directoryFiles, err = getFilesFromEmbed(*fs, strings.TrimSuffix(root, "/"))
+	} else {
+		directoryFiles, err = getAllFiles(root)
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	files, err := parseDirectoryFiles(root, extensions, directoryFiles)
+	if err != nil {
+		return nil, err
+	}
+
+	return files, nil
+}
+
+func parseDirectoryFiles(
+	root string,
+	extensions []string,
+	directoryFiles []FsFile,
+) (map[string]*templatefile, error) {
+	var files = map[string]*templatefile{}
+	var exts = map[string]bool{}
+
 	for _, e := range extensions {
 		exts[e] = true
 	}
 
-	// find all template files
-	err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
-		// skip dirs as they can never be valid templates
-		if info == nil || info.IsDir() {
-			return nil
+	for _, file := range directoryFiles {
+		if file.Entry.IsDir() {
+			continue
 		}
 
 		// skip if extension not in list of allowed extensions
-		e := filepath.Ext(path)
+		e := filepath.Ext(file.Entry.Name())
 		if _, ok := exts[e]; !ok {
-			return nil
+			continue
 		}
 
-		path = filepath.ToSlash(path)
-		name := strings.TrimPrefix(path, root)
-
-		// read file into memory
-		contents, err := ioutil.ReadFile(path)
+		filename := file.Path
+		contents, err := os.ReadFile(filename)
 		if err != nil {
-			return err
+			return nil, err
 		}
 
 		tf, err := newTemplateFile(contents)
 		if err != nil {
-			return err
+			return nil, err
 		}
 
-		files[name] = tf
-		return nil
-	})
+		path := filepath.ToSlash(filename)
+		name := strings.TrimPrefix(path, root)
 
-	return files, err
+		files[name] = tf
+	}
+
+	return files, nil
 }
 
 // newTemplateFile parses the file contents into something that text/template can understand

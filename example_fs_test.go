@@ -1,6 +1,7 @@
 package extemplate_test
 
 import (
+	"embed"
 	"html/template"
 	"os"
 	"strings"
@@ -8,14 +9,19 @@ import (
 	"github.com/dannyvankooten/extemplate"
 )
 
-func ExampleExtemplate_ParseDir() {
+//go:embed examples/*.tmpl examples/**/*.tmpl
+var FS embed.FS
+
+func ExampleFsExtemplate_ParseDir() {
 	xt := extemplate.New().Funcs(template.FuncMap{
 		"tolower": strings.ToLower,
 	})
-	err := xt.ParseDir("examples", []string{".tmpl"}, nil)
+
+	err := xt.ParseDir("examples", []string{".tmpl"}, &FS)
 	if err != nil {
 		panic(err)
 	}
+
 	err = xt.ExecuteTemplate(os.Stdout, "child.tmpl", nil)
 	if err != nil {
 		panic(err)
