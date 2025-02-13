@@ -241,7 +241,7 @@ func findTemplateFiles(
 		return nil, err
 	}
 
-	files, err := parseDirectoryFiles(root, extensions, directoryFiles)
+	files, err := parseDirectoryFiles(root, extensions, directoryFiles, fs)
 	if err != nil {
 		return nil, err
 	}
@@ -253,6 +253,7 @@ func parseDirectoryFiles(
 	root string,
 	extensions []string,
 	directoryFiles []FsFile,
+	fs *embed.FS,
 ) (map[string]*templatefile, error) {
 	var files = map[string]*templatefile{}
 	var exts = map[string]bool{}
@@ -273,9 +274,18 @@ func parseDirectoryFiles(
 		}
 
 		filename := file.Path
-		contents, err := os.ReadFile(filename)
-		if err != nil {
-			return nil, err
+		var contents []byte
+		var err error
+		if fs != nil {
+			contents, err = fs.ReadFile(filename)
+			if err != nil {
+				return nil, err
+			}
+		} else {
+			contents, err = os.ReadFile(filename)
+			if err != nil {
+				return nil, err
+			}
 		}
 
 		tf, err := newTemplateFile(contents)
